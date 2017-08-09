@@ -20,7 +20,7 @@ from django.db.models import Q
 tz = 'Africa/Kampala'
 
 
-class RapidproKey(models.Model):
+class Rapidpro_workspace(models.Model):
     workspace = models.CharField(max_length=200)
     host = models.CharField(max_length=200)
     key = models.CharField(max_length=255)
@@ -135,12 +135,14 @@ class Contact(models.Model):
                 for g in contact.groups:
                     grp.append(g.name)
                 if cls.contact_exists(contact):
-                    con = cls.objects.get(uuid=contact.uuid)
-                    for gp in con.groups:
-                        if gp in grp:
-                            grp.remove(gp)
-                        else:
-                            grp.append(gp)
+                    contact_instance = cls.objects.get(uuid=contact.uuid)
+                    groups_lst = cls.clean_data(contact_instance.groups)
+                    if len(groups_lst) > 0:
+                        for gp in groups_lst:
+                            if gp not in grp:
+                                grp.append(gp)
+                    else:
+                        pass
 
                     cls.objects.filter(uuid=contact.uuid).update(name=contact.name,
                                                                  language=contact.language,
@@ -183,6 +185,15 @@ class Contact(models.Model):
         return cls.objects.all()
 
     @classmethod
+    def clean_data(cls, group_list):
+        group_list = "".join(group_list)
+        new_group_list = group_list[:-1].split(",")
+        groups = []
+        for string in new_group_list:
+            groups.append(string[3:-1])
+        return groups
+
+    @classmethod
     def get_project_contacts(cls, project_list):
         query = reduce(operator.or_, (Q(groups__contains=item) for item in project_list))
         return cls.objects.filter(query).all()
@@ -223,7 +234,6 @@ class Contact(models.Model):
 class Message(models.Model):
     msg_id = models.IntegerField()
     broadcast = models.IntegerField(null=True)
-    contact_uuid = models.CharField(max_length=200)
     contact = models.ForeignKey(Contact, null=True, blank=True)
     urn = models.CharField(max_length=200)
     channel = models.CharField(max_length=200)
@@ -249,8 +259,9 @@ class Message(models.Model):
             for message_batch in client.get_messages(folder=folder).iterfetches(retry_on_rate_exceed=True):
                 for message in message_batch:
                     if not cls.message_exists(message):
+                        contact = Contact.objects.filter(uuid=message.contact.uuid).first()
                         cls.objects.create(msg_id=message.id, broadcast=message.broadcast,
-                                           contact_uuid=message.contact.uuid,
+                                           contact=contact,
                                            urn=cls.clean_msg_contacts(message), channel=message.channel,
                                            direction=message.direction,
                                            type=message.type, status=message.status, visibility=message.visibility,
@@ -456,7 +467,6 @@ class CampaignEvent(models.Model):
     def campaign_event_exists(cls, campaign_event):
         return cls.objects.filter(uuid=campaign_event.uuid).exists()
 
-
     @classmethod
     def get_campaign_event(cls):
         return cls.objects.all()
@@ -468,7 +478,6 @@ class CampaignEvent(models.Model):
 class Run(models.Model):
     run_id = models.IntegerField()
     flow = models.CharField(max_length=200)
-    contact_uuid = models.CharField(max_length=200)
     contact = models.ForeignKey(Contact, null=True, blank=True)
     responded = models.BooleanField(default=False)
     exit_type = models.CharField(max_length=100, null=True, blank=True)
@@ -483,28 +492,21 @@ class Run(models.Model):
         for run_batch in client.get_runs().iterfetches(retry_on_rate_exceed=True):
             for run in run_batch:
                 if not cls.run_exists(run):
-                    run_instance = cls.objects.create(run_id=run.id, flow=run.flow, contact_uuid=run.contact.uuid,
+                    contact = Contact.objects.filter(uuid=run.contact.uuid).first()
+                    run_instance = cls.objects.create(run_id=run.id, flow=run.flow, contact=contact,
                                                       responded=run.responded,
                                                       exit_type=run.exit_type, exited_on=run.exited_on,
                                                       created_on=run.created_on, modified_on=run.modified_on)
                     added += 1
                     Value.add_values(run=run_instance, values=run.values)
+                else:
+                    pass
 
         return added
 
     @classmethod
     def run_exists(cls, run):
         return cls.objects.filter(run_id=run.id).exists()
-
-    @classmethod
-    def assign_foreignkey(cls):
-        contacts = Contact.objects.all()
-        updated = 0
-        for contact in contacts:
-            query = Q(contact_uuid=contact.uuid) & Q(run_fk_fixed=False)
-            cls.objects.filter(query).all().update(contact=contact, run_fk_fixed=True)
-            updated += 1
-        return updated
 
     def __unicode__(self):
         return self.run_id
