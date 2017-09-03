@@ -273,7 +273,7 @@ def getdatatest(request):
     data = Voice.get_data(proj="mCrag")
     lss = []
     for d in data:
-        contact = d['phone_number']
+        contact = d['phone']
         lss.append(contact)
 
     return render(request, 'report/data.html')

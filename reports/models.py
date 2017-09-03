@@ -580,21 +580,24 @@ class Voice(models.Model):
         req = urllib2.Request(url)
         response = urllib2.urlopen(req)
         datas = json.load(response)
+
         for data in datas:
-            if cls.voice_id_exists(id=data['id']):
+            if data['phone'] == "" or data['phone'] is None:
                 pass
             else:
-                urns = cls.clean_contact(data['phone_number'])
-                if Contact.urns_exists(number=urns):
-                    uuid = hashlib.md5(data['created_at']).hexdigest()
-                    obj = Contact.objects.filter(urns=urns).first()
-                    pro = Project.objects.get(name=proj)
-                    cls.objects.create(id=data['id'], uuid=uuid, project=pro, contact=obj,
-                                       reason=data['reason_for_call'],
-                                       advice=data['advice_given'], created_by=data['created_by'],
-                                       created_on=data['created_at'])
-                else:
+                if cls.voice_id_exists(id=data['id']):
                     pass
+
+                else:
+                    urns = cls.clean_contact(data['phone'])
+                    if Contact.urns_exists(number=urns):
+                        uuid = hashlib.md5(data['created_at']).hexdigest()
+                        obj = Contact.objects.filter(urns=urns).first()
+                        pro = Project.objects.get(name=proj)
+                        cls.objects.create(id=data['id'], uuid=uuid, project=pro, contact=obj,
+                                           reason=data['reason_for_call'],
+                                           advice=data['advice_given'], created_by=data['created_by'],
+                                           created_on=data['created_at'])
 
         return datas
 
