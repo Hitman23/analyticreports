@@ -1,32 +1,47 @@
-# analyticreports
-Analyticreports is a project to get rapidpro data into a local database automatically. This data can be reported on in different forms(pdf/excel).
-The data can also be manipulated with custom methods.
+# Analytics Report
+Analytics Report is a TMCG Project used to get SMS and Voice Platform data into a local database
+for purposes of reporting.
 
-Prerequisites
+## Features
+* Getting SMS Platform Data
+* Getting Voice Platform Data
+* Generating pdf and csv reports
+* Sending weekly emails to project registered project leads
 
--Install requirements from requirements files.
 
--Make sure you have rabbitmq-server installed globally.
+## Prerequisite
+* Make sure you have rabbitmq-server installed globally.
 
-  -worker: "celery worker -A analyticreports --loglevel=INFO" run the worker from the root directory of the project.
+## Installation
+```
+#clone the project.
+git clone (project-link)
+
+#Install requirements.
+pip install requirements.pip
+
+#Run django server
+python manage.py runserver
+
+#Run the worker.
+ celery worker -A analyticreports --loglevel=INFO
 	
-  -scheduler: "celery -A analyticreports beat -l info -S django" run the scheduler from the root directory of the project.
-	
-  -http://docs.celeryproject.org/en/latest/userguide/periodic-tasks.html(more about celery)
-  
-Usage/procedure
+#Run the scheduler.
+celery -A analyticreports beat -l info -S django
 
--Enter Rapidpro host & key in database.
+ ```
+ [For more info on periodic tasks](http://docs.celeryproject.org/en/latest/userguide/periodic-tasks.html)
 
--Create intervals and crontabs(in the database). When periodic tasks should run.
+## Usage
 
--Create periodic tasks(in the database) for getting rapidpro data.
+* Create superuser `python manage.py createsuperuser` and login via django admin
+* Add Workspaces.
+* Add Intervals and Crontabs for when periodic tasks should run.
+* Add Periodic tasks for getting the data.
+* Add Projects(groups for which to generate excel/pdf/emails). This can be done after getting the group data from
+rapidpro.
+* Add Periodic tasks for generating excel/pdf/email.
+* Add Emails.
+* Visit http://127.0.0.1:8000/home.
 
--Create projects(groups for which to generate excel/pdf/emails). This can be done after getting the group data from rapidpro.
-
--Create periodic tasks for generating excel/pdf/email.
-
--It can generate excel and pdf files of this data.
-
--It can also email these excel and pdf files to specific email(also have to be stored in the database).
 

@@ -1,20 +1,21 @@
+# noinspection PyUnresolvedReferences,PyUnresolvedReferences,PyUnresolvedReferences
+from celery import shared_task
 from celery.schedules import crontab
 from celery.task import periodic_task
 from celery.utils.log import get_task_logger
 from celery import shared_task
-from .models import Group, Email, Message, Rapidpro_workspace, Run, Project
+from .models import Group, Email, Message, Workspace, Run, Project
 
 
 @shared_task
 def get_rapidpro_data():
-    Rapidpro_workspace.get_rapidpro_data()
+    Workspace.get_rapidpro_data()
     return
 
 
 @shared_task
-def organise_data():
-    Message.assign_foreignkey()
-    Run.assign_foreignkey()
+def get_workspace_data():
+    Workspace.get_rapidpro_workspaces()
     return
 
 

@@ -5,10 +5,9 @@ register = template.Library()
 
 @register.filter('clean', needs_autoescape=True)
 @register.simple_tag
-def clean(group_list):
-    group_list = "".join(group_list)
-    new_group_list = group_list[:-1].split(",")
-    groups = []
-    for string in new_group_list:
-        groups.append(string[3:-1])
-    return groups
+def clean(groups_string):
+    unclean_groups_list = groups_string[:-1].split(",")
+    clean_groups_list = []
+    for unclean_group in unclean_groups_list:
+        clean_groups_list.append(unclean_group[3:-1])
+    return clean_groups_list

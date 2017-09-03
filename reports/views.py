@@ -1,117 +1,303 @@
-import os
-import datetime as datetime
-import StringIO
-from django.conf import settings
-from django.core.mail import EmailMessage
-from analyticreports import settings
-from django.http import HttpResponse
-from django.shortcuts import render
-from django.template import RequestContext
-from .models import Contact, Message, Run, Flow, Group, Project, CampaignEvent, Campaign, Project, Voice, Email
-from django.template.loader import render_to_string
-from django.utils.timezone import now
-from itertools import chain
-from django.views.generic.base import View
 import csv
-import json
 import datetime
+import random
+import time
+from StringIO import StringIO
+import pytz
+from django.core.mail import EmailMessage
+from django.http import HttpResponse
+from django.shortcuts import render, render_to_response
+from reports.templatetags import report_tags
+from .models import Contact, Message, Group, CampaignEvent, Project, Voice, Email
+from nvd3 import pieChart, cumulativeLineChart, discreteBarChart, scatterChart
+from django.views.decorators.cache import cache_page
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_CENTER
+from reportlab.lib.pagesizes import letter, cm, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from django.contrib.auth.forms import AuthenticationForm
+from django.contrib.auth.models import User
+from django.core.exceptions import ObjectDoesNotExist
+from django.forms import ValidationError
+
+tz = 'Africa/Kampala'
 
 
+class EmailAuthenticationForm(AuthenticationForm):
+    def clean_username(self):
+        username = self.data['username']
+        if '@' in username:
+            try:
+                username = User.objects.get(email=username).username
+            except ObjectDoesNotExist:
+                raise ValidationError(
+                    self.error_messages['invalid_login'],
+                    code='invalid_login',
+                    params={'username': self.username_field.verbose_name},
+                )
+        return username
+
+
+@cache_page(60 * 15)
 def dashboard(request):
     projects = Project.get_all_projects()
+    groups = Group.get_all_groups()
+    groups_list = []
+    for group in groups:
+        groups_list.append(group.name)
+
+    contacts = Contact.get_all_contacts()
+    registered_contacts = Contact.get_all_registered_contacts(groups_list)
+    registered_contacts_list = []
+    for contact in registered_contacts:
+        registered_contacts_list.append(contact.urns)
+    unregistered_contacts = Contact.get_all_unregistered_contacts(groups_list)
+    unregistered_contacts_list = []
+    for contact in unregistered_contacts:
+        unregistered_contacts_list.append(contact.urns)
+    percentage_registered_contacts = Contact.get_all_contacts_percentage(registered_contacts.count(), groups_list)
+    percentage_unregistered_contacts = Contact.get_all_contacts_percentage(unregistered_contacts.count(), groups_list)
+    incoming_messages = Message.get_all_incoming_messages()
+    outgoing_messages = Message.get_all_outgoing_messages()
+    messages_cost = Message.get_cost_of_incoming_messages(incoming_messages.count()) + Message. \
+        get_cost_of_outgoing_messages(outgoing_messages.count())
+    registered_incoming_messages = Message.get_all_specific_incoming_messages(registered_contacts_list)
+    unregistered_incoming_messages = Message.get_all_specific_incoming_messages(unregistered_contacts_list)
+    # unregistered_incoming_messages = incoming_messages.count() - registered_incoming_messages.count()
+    unregistered_incoming_messages_cost = Message.get_cost_of_incoming_messages(unregistered_incoming_messages.count())
+    registered_incoming_messages_cost = Message.get_cost_of_incoming_messages(registered_incoming_messages.count())
+
+    registered_contacts_set = registered_contacts.count()
+    unregistered_contacts_set = unregistered_contacts.count()
+
+    x1_data = ['Registered Contacts', 'Unregistered Contacts']
+    y1_data = [registered_contacts_set, unregistered_contacts_set]
+
+    color_list = ['#008000', '#DC143C']
+    extra_serie = {
+        "tooltip": {"y_start": "", "y_end": " cal"},
+        "color_list": color_list
+    }
+    chart1_data = {'x': x1_data, 'y1': y1_data, 'extra1': extra_serie}
+    chart1_type = "pieChart"
+    chart1_container = 'piechart_container'  # container name
+    extra = {
+        'x_is_date': False,
+        'x_axis_format': '',
+        'tag_script_js': True,
+        'jquery_on_ready': False,
+        'donut': True,
+        'donutRatio': 0.35,
+    }
+
     return render(request, 'report/dashboard.html', locals())
 
 
-def project_groups_detail(request):  # (request, name) include project name to make it be the the one selected when the
-    # based on clicked on project
-
-    mega_poc = Project.objects.get(name='mCRAG')
-    group = mega_poc.group.all()
-    group_list = Project.get_project_data(name='mCRAG')
-    project_list = Project.objects.filter(name='mCRAG').values_list('group__name', flat=True)
-    contacts = Contact.get_project_contacts(project_list=project_list)
-    c = Contact.objects.filter(uuid="3a8e1aee-15f5-41aa-9580-84bd68641e6d").values_list('groups')
-    return render(request, 'report/project_group.html', locals())
+def dashboard_nav(request):
+    projects = Project.get_all_projects()
+    return render(request, 'adminlte/lib/_main_sidebar.html', locals())
 
 
+@cache_page(60 * 15)
 def report_template_one(request, project_id):
+    projects = Project.get_all_projects()
     project = Project.objects.get(id=project_id)
     project_groups = project.group.all()
+    top_five_project_groups = project.group.all().order_by('-count')[:5]
     project_groups_count = project.group.count()
-    project_group_list = Project.get_project_data(name=project.name)
-    voice_platiform = Voice.objects.filter(project=project).all()
+    project_group_list = Project.get_project(name=project.name)
+    voice_platform = Voice.get_weekly_voice_interaction(project=project)
+    top_five_voice_interactions = voice_platform.order_by('-created_on')[:5]
 
     group_list = []
-
     for group in project_groups:
         group_list.append(group.name)
 
-    contacts = Contact.get_project_contacts(project_list=group_list)
-
-    weekly_contacts = Contact.get_weekly_project_contacts(project_list=group_list)
-
-    weekly_contacts_value_list = Contact.get_all_project_contacts_value_list(project_list=group_list)
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
+    top_five_weekly_contacts = weekly_contacts.order_by('-created_on')[:5]
+    weekly_contacts_value_list = Contact.get_all_project_contacts_value_list(project_groups_list=group_list)
+    weekly_contact_percentage = Contact.get_project_contacts_percentage(contact_variable=weekly_contacts.count(),
+                                                                        project_groups_list=group_list)
     contact_urns_list = []
     for contact in contacts:
         contact_urns_list.append(contact.urns)
 
+    number_of_contacts = len(contact_urns_list)
+    incoming_messages = Message.get_all_project_incoming_messages(contact_urns_list)
+    outgoing_messages = Message.get_all_project_outgoing_messages(contact_urns_list)
+    project_messages_cost = Message.get_cost_of_incoming_messages(incoming_messages.count()) + Message. \
+        get_cost_of_outgoing_messages(outgoing_messages.count())
     weekly_sent_messages = Message.get_weekly_sent_messages(contact_urns_list)
     weekly_delivered_messages = Message.get_weekly_delivered_messages(contact_urns_list)
     weekly_failed_messages = Message.get_weekly_failed_messages(contact_urns_list)
+    top_five_weekly_failed_messages = weekly_failed_messages.order_by('-sent_on')[:5]
     weekly_hanging_messages = Message.get_weekly_hanging_messages(contact_urns_list)
-    weekly_unread_messages = Message.get_weekly_unread_messages(contact_urns_list)
+    top_five_weekly_hanging_messages = weekly_hanging_messages.order_by('-sent_on')[:5]
     weekly_campaign_events = CampaignEvent.get_campaign_event()
     groups = Group.get_all_groups()
+    percentage_weekly_delivered_messages = Message.get_project_weekly_messages_percentage(
+        message_variable=weekly_delivered_messages.count(), contacts_list=contact_urns_list)
+    percentage_weekly_hanging_messages = Message.get_project_weekly_messages_percentage(
+        message_variable=weekly_hanging_messages.count(), contacts_list=contact_urns_list)
+    percentage_weekly_failed_messages = Message.get_project_weekly_messages_percentage(
+        message_variable=weekly_failed_messages.count(), contacts_list=contact_urns_list)
+
+    weekly_delivered_messages_set = weekly_delivered_messages.count()
+    weekly_failed_messages_set = weekly_failed_messages.count()
+    weekly_hanging_messages_set = weekly_hanging_messages.count()
+
+    x1_data = ['Delivered', 'Failed', 'Hanging']
+    y1_data = [weekly_delivered_messages_set, weekly_failed_messages_set, weekly_hanging_messages_set]
+
+    color_list = ['#008000', '#DC143C', '#FFD700']
+    extra_serie = {
+        "tooltip": {"y_start": "", "y_end": " messages"},
+        "color_list": color_list
+    }
+    chart1_data = {'x': x1_data, 'y1': y1_data, 'extra1': extra_serie}
+    chart1_type = "pieChart"
+    chart1_container = 'piechart_container'  # container name
+    extra = {
+        'x_is_date': False,
+        'x_axis_format': '',
+        'tag_script_js': True,
+        'jquery_on_ready': False,
+    }
+
+    x2_data = []
+    x2_data1 = []
+    for i in range(0, 7):
+        x2_data.append(datetime.date.today() - datetime.timedelta(days=i))
+        x2_data1.append(str(datetime.date.today() - datetime.timedelta(days=i)))
+
+    x2data = []
+    for given_date in x2_data:
+        start_time = int(time.mktime(given_date.timetuple()) * 1000)
+        x2data.append(start_time)
+        # nb_element = 100
+        # x2data = range(nb_element)
+        # x2data = map(lambda x: start_time + x * 1000000000, x2data)
+
+    y2_data = []
+    for j in x2_data:
+        y2_data.append(weekly_contacts.filter(created_on__date=j).count())
+
+    tooltip_date = "%d %b %Y %H:%M:%S %p"
+    extra2_serie = {
+        "tooltip": {"y_start": "", "y_end": " contacts"},
+        "date_format": tooltip_date
+    }
+    chart2_data = {'x': x2data,
+                   'name2': 'series 2', 'y2': y2_data, 'extra2': extra2_serie
+                   }
+    chart2_type = "lineChart"
+    chart2_container = 'linechart_container'  # container name
+    extra2 = {
+        'x_is_date': True,
+        'x_axis_format': '',
+        'tag_script_js': True,
+        'jquery_on_ready': False,
+    }
 
     return render(request, 'report/template_one.html', locals())
 
 
-def report_template_one_pdf(request, project_id):
+@cache_page(60 * 15)
+def view_all_project_groups(request, project_id):
+    projects = Project.get_all_projects()
     project = Project.objects.get(id=project_id)
     project_groups = project.group.all()
-    project_groups_count = project.group.count()
-    project_group_list = Project.get_project_data(name=project.name)
-    voice_platiform = Voice.objects.filter(project=project).all()
 
+    return render(request, 'report/project_groups.html', locals())
+
+
+@cache_page(60 * 15)
+def view_all_project_weekly_contacts(request, project_id):
+    projects = Project.get_all_projects()
+    project = Project.objects.get(id=project_id)
+    project_groups = project.group.all()
     group_list = []
-
     for group in project_groups:
         group_list.append(group.name)
 
-    contacts = Contact.get_project_contacts(project_list=group_list)
-    weekly_contacts = Contact.get_weekly_project_contacts(project_list=group_list)
-    contact_counts = Contact.get_project_contacts_count(project_list=group_list)
-    weekly_contacts_value_list = Contact.get_all_project_contacts_value_list(project_list=group_list)
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
+
+    return render(request, 'report/weekly_project_contacts.html', locals())
+
+
+@cache_page(60 * 15)
+def view_all_project_weekly_failed_messages(request, project_id):
+    projects = Project.get_all_projects()
+    project = Project.objects.get(id=project_id)
+    project_groups = project.group.all()
+    group_list = []
+    for group in project_groups:
+        group_list.append(group.name)
+
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
     contact_urns_list = []
     for contact in contacts:
         contact_urns_list.append(contact.urns)
 
-    weekly_sent_messages = Message.get_weekly_sent_messages(contact_urns_list)
-    weekly_delivered_messages = Message.get_weekly_delivered_messages(contact_urns_list)
     weekly_failed_messages = Message.get_weekly_failed_messages(contact_urns_list)
+
+    return render(request, 'report/weekly_project_failed_messages.html', locals())
+
+
+@cache_page(60 * 15)
+def view_all_project_weekly_hanging_messages(request, project_id):
+    projects = Project.get_all_projects()
+    project = Project.objects.get(id=project_id)
+    project_groups = project.group.all()
+    group_list = []
+    for group in project_groups:
+        group_list.append(group.name)
+
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
+    contact_urns_list = []
+    for contact in contacts:
+        contact_urns_list.append(contact.urns)
+
     weekly_hanging_messages = Message.get_weekly_hanging_messages(contact_urns_list)
-    weekly_unread_messages = Message.get_weekly_unread_messages(contact_urns_list)
-    weekly_campaign_events = CampaignEvent.get_campaign_event()
-    groups = Group.get_all_groups()
 
-    return render(request, 'report/my-pdf.html', locals())
+    return render(request, 'report/weekly_project_hanging_messages.html', locals())
 
 
+def view_all_project_weekly_voice_interactions(request, project_id):
+    project = Project.objects.get(id=project_id)
+    voice_interactions = Voice.objects.filter(project=project).all()
+    return render(request, 'report/weekly_project_voice_interactions.html', locals())
+
+
+@cache_page(60 * 15)
 def export_to_csv(request, project_id):
     project = Project.objects.get(id=project_id)
-    voice_platiform = Voice.objects.filter(project=project).all()
+    voice_platform = Voice.objects.filter(project=project).all()
     datetime_variable = datetime.datetime.now()
     response = HttpResponse(content_type='text/csv')
     response['Content-Disposition'] = 'attachment; filename="%s_report_%s.csv"' % (project.name, datetime_variable)
     project_groups = project.group.all()
+
     group_list = []
     for group in project_groups:
         group_list.append(group.name)
-    contacts = Contact.get_project_contacts(project_list=group_list)
-    weekly_contacts = Contact.get_weekly_project_contacts(project_list=group_list)
+
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
+
     contact_urns_list = []
     for contact in contacts:
         contact_urns_list.append(contact.urns)
+
+    number_of_contacts = len(contact_urns_list)
+    incoming_messages = Message.get_all_project_incoming_messages(contact_urns_list)
+    outgoing_messages = Message.get_all_project_outgoing_messages(contact_urns_list)
     weekly_sent_messages = Message.get_weekly_sent_messages(contact_urns_list)
     weekly_delivered_messages = Message.get_weekly_delivered_messages(contact_urns_list)
     weekly_failed_messages = Message.get_weekly_failed_messages(contact_urns_list)
@@ -129,43 +315,55 @@ def export_to_csv(request, project_id):
     writer.writerow([])
     writer.writerow([])
     writer.writerow(['%s Contacts' % project.name])
-    writer.writerow(['Contact Number', 'Contact Name', 'Group', 'Created on / Joined on'])
+    writer.writerow(['Contact Number', 'Contact Name', 'Created on / Joined on'])
     for contact in contacts:
-        writer.writerow([contact.urns, contact.name, contact.groups, contact.created_on])
+        contact_groups = [contact_groups for contact_groups in report_tags.clean(contact.groups)]
+        writer.writerow([contact.urns, contact.name, contact.created_on])
     writer.writerow([])
     writer.writerow([])
     writer.writerow(['%s Weekly Joined Contacts' % project.name])
     writer.writerow(['Contact Number', 'Contact Name', 'Group', 'Created on / Joined on'])
     for contact in weekly_contacts:
-        writer.writerow([contact.urns, contact.name, contact.groups, contact.created_on])
+        contact_groups = [contact_groups for contact_groups in report_tags.clean(contact.groups)]
+        writer.writerow([contact.urns, contact.name, contact_groups, contact.created_on])
     writer.writerow([])
     writer.writerow([])
-    writer.writerow(['%s Weekly Sent Messages' % project.name])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_sent_messages:
-        writer.writerow([message.urn, message.text, message.status, message.sent_on])
-    writer.writerow([])
-    writer.writerow([])
-    writer.writerow(['%s Weekly Delivered Messages' % project.name])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_delivered_messages:
-        writer.writerow([message.urn, message.text, message.status, message.sent_on])
-    writer.writerow([])
-    writer.writerow([])
-    writer.writerow(['%s Weekly Failed Messages' % project.name])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_failed_messages:
-        writer.writerow([message.urn, message.text, message.status, message.sent_on])
-    writer.writerow([])
-    writer.writerow([])
-    writer.writerow(['%s Weekly Hanging Messages' % project.name])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_hanging_messages:
-        writer.writerow([message.urn, message.text, message.status, message.sent_on, ])
-    writer.writerow([])
-    writer.writerow([])
+
+    if number_of_contacts > 0:
+        writer.writerow(['%s Message Summary' % project.name])
+        writer.writerow(['Description', 'Number of Messages'])
+        writer.writerow(['Incoming Messages', incoming_messages.count()])
+        writer.writerow(['Outgoing Messages', outgoing_messages.count()])
+        writer.writerow([])
+        writer.writerow([])
+
+        writer.writerow(['%s Weekly Sent Messages' % project.name])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_sent_messages:
+            writer.writerow([message.urn, message.text, message.status, message.sent_on])
+        writer.writerow([])
+        writer.writerow([])
+        writer.writerow(['%s Weekly Delivered Messages' % project.name])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_delivered_messages:
+            writer.writerow([message.urn, message.text, message.status, message.sent_on])
+        writer.writerow([])
+        writer.writerow([])
+        writer.writerow(['%s Weekly Failed Messages' % project.name])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_failed_messages:
+            writer.writerow([message.urn, message.text, message.status, message.sent_on])
+        writer.writerow([])
+        writer.writerow([])
+        writer.writerow(['%s Weekly Hanging Messages' % project.name])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_hanging_messages:
+            writer.writerow([message.urn, message.text, message.status, message.sent_on, ])
+        writer.writerow([])
+        writer.writerow([])
+
     writer.writerow(['Contact Number', 'Reason for call', 'Date'])
-    for call in voice_platiform:
+    for call in voice_platform:
         writer.writerow([call.contact, call.reason, call.created_on])
     writer.writerow([])
     writer.writerow([])
@@ -174,21 +372,26 @@ def export_to_csv(request, project_id):
     return response
 
 
+@cache_page(60 * 15)
 def send_csv_attachment_email(request, project_id):
-    csv_file = StringIO.StringIO()
-
+    buffer = StringIO()
     project = Project.objects.get(id=project_id)
     datetime_variable = datetime.date.today()
     project_groups = project.group.all()
-    voice_platiform = Voice.objects.filter(project=project).all()
+    voice_platform = Voice.objects.filter(project=project).all()
     group_list = []
     for group in project_groups:
         group_list.append(group.name)
-    contacts = Contact.get_project_contacts(project_list=group_list)
-    weekly_contacts = Contact.get_weekly_project_contacts(project_list=group_list)
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
+
     contact_urns_list = []
     for contact in contacts:
         contact_urns_list.append(contact.urns)
+
+    number_of_contacts = len(contact_urns_list)
+    incoming_messages = Message.get_all_project_incoming_messages(contact_urns_list)
+    outgoing_messages = Message.get_all_project_outgoing_messages(contact_urns_list)
     weekly_sent_messages = Message.get_weekly_sent_messages(contact_urns_list)
     weekly_delivered_messages = Message.get_weekly_delivered_messages(contact_urns_list)
     weekly_failed_messages = Message.get_weekly_failed_messages(contact_urns_list)
@@ -196,77 +399,87 @@ def send_csv_attachment_email(request, project_id):
     campaign_events = CampaignEvent.get_campaign_event()
     groups = Group.get_all_groups()
 
-    writer = csv.writer(csv_file)
+    writer = csv.writer(buffer)
     writer.writerow([])
     writer.writerow(['%s Report' % project.name])
-    writer.writerow(['Report Date: %s' % datetime_variable])
+    writer.writerow(['Generated on: %s' % datetime_variable])
     writer.writerow(['Compiled / Reported by: %s' % request.user])
     writer.writerow([])
     writer.writerow([])
+
     writer.writerow(['All %s Groups' % project.name])
     writer.writerow(['Group', 'Number of participants'])
     for project_group in project_groups:
         writer.writerow([project_group.name, project_group.count])
     writer.writerow([])
     writer.writerow([])
+
     writer.writerow(['All %s Contacts' % project.name])
     writer.writerow(['Contact Number', 'Contact Name', 'Group(s)', 'Created on / Joined on'])
     for contact in contacts:
-        writer.writerow([contact.urns, contact.name, contact.groups, contact.created_on])
+        writer.writerow([contact.urns, contact.name,
+                         (contact_groups for contact_groups in report_tags.clean(contact.groups)), contact.created_on])
     writer.writerow([])
     writer.writerow([])
+
     writer.writerow(['%s Weekly Enrolled Contacts' % project.name])
     writer.writerow(['Contact Number', 'Contact Name', 'Group(s)', 'Created on / Joined on'])
     for contact in weekly_contacts:
-        writer.writerow([contact.urns, contact.name, contact.groups, contact.created_on])
+        writer.writerow([contact.urns, contact.name,
+                         (contact_groups for contact_groups in report_tags.clean(contact.groups)), contact.created_on])
     writer.writerow([])
     writer.writerow([])
-    writer.writerow(['%s Weekly Delivered Messages' % project.name])
-    writer.writerow(['Weekly Delivered Messages Count %s' % weekly_delivered_messages.count()])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_delivered_messages:
-        writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on])
-    writer.writerow([])
-    writer.writerow([])
-    writer.writerow(['%s Weekly Failed Messages' % project.name])
-    writer.writerow(['Weekly Failed Messages Count %s' % weekly_failed_messages.count()])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_failed_messages:
-        writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on])
-    writer.writerow([])
-    writer.writerow([])
-    writer.writerow(['%s Weekly Hanging Messages' % project.name])
-    writer.writerow(['Weekly Hanging Messages Count %s' % weekly_hanging_messages.count()])
-    writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    for message in weekly_hanging_messages:
-        writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on, ])
-    writer.writerow([])
-    writer.writerow([])
-    writer.writerow([])
+
+    if number_of_contacts > 0:
+        writer.writerow(['%s Message Summary' % project.name])
+        writer.writerow(['Description', 'Number of Messages'])
+        writer.writerow(['Incoming Messages', incoming_messages.count()])
+        writer.writerow(['Outgoing Messages', outgoing_messages.count()])
+        writer.writerow([])
+        writer.writerow([])
+
+        writer.writerow(['%s Weekly Delivered Messages' % project.name])
+        writer.writerow(['Weekly Delivered Messages Count %s' % weekly_delivered_messages.count()])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_delivered_messages:
+            writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on])
+        writer.writerow([])
+        writer.writerow([])
+
+        writer.writerow(['%s Weekly Failed Messages' % project.name])
+        writer.writerow(['Weekly Failed Messages Count %s' % weekly_failed_messages.count()])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_failed_messages:
+            writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on])
+        writer.writerow([])
+        writer.writerow([])
+
+        writer.writerow(['%s Weekly Hanging Messages' % project.name])
+        writer.writerow(['Weekly Hanging Messages Count %s' % weekly_hanging_messages.count()])
+        writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
+        for message in weekly_hanging_messages:
+            writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on, ])
+        writer.writerow([])
+        writer.writerow([])
+
     writer.writerow(['Contact Number', 'Reason for call', 'Date'])
-    for call in voice_platiform:
+    for call in voice_platform:
         writer.writerow([call.contact, call.reason, call.created_on])
     writer.writerow([])
     writer.writerow([])
     writer.writerow([])
-    # writer.writerow([])
-    # writer.writerow(['%s Weekly Sent Messages' % project.name])
-    # writer.writerow(['Contact Number', 'Message', 'Status', 'Sent On'])
-    # for message in weekly_sent_messages:
-    #     writer.writerow([message.urn, message.text.encode("utf8"), message.status, message.sent_on])
+    pdf = generate_pdf_weekly_report(request, project.id)
 
-    # Email.email_report(csv_file=csv_file.getvalue(), project_id=project.id)
-    subject = '%s Weekly Report %s' % (project.name, datetime_variable)
-    email = EmailMessage(
-        subject,
-        'Please find attached a sample of the csv file attachment, voice data and pdf view to be included '
-        'during course of the week.',
-        settings.EMAIL_HOST_USER,
-        ['faithnassiwa@gmail.com'],
-    )
-    email.attach('%s_report_%s.csv' % (project.name, datetime_variable), csv_file.getvalue(), 'text/csv')
+    # csv_file = buffer.getvalue()
+    # buffer.close()
+    # return csv_file
+
+    email = Email.get_report_emails(project_id=project.id)
+    email.attach('%s_report_%s.csv' % (project.name, datetime_variable), buffer.getvalue(), 'text/csv')
+    email.attach('%s_report_%s.pdf' % (project.name, datetime_variable), pdf, 'application/pdf')
     email.send()
     return HttpResponse("Email Sent")
+
 
 
 def getdatatest(request):
@@ -276,5 +489,205 @@ def getdatatest(request):
         contact = d['phone']
         lss.append(contact)
 
-    return render(request, 'report/data.html')
 
+def generate_pdf_weekly_report(request, project_id):
+    buffer = StringIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=20, bottomMargin=20)
+    report = []
+
+    project = Project.objects.get(id=project_id)
+    project_groups = project.group.all()
+    top_five_project_groups = project.group.all().order_by('-count')[:5]
+    project_groups_count = project.group.count()
+    project_group_list = Project.get_project(name=project.name)
+    voice_platform = Voice.get_weekly_voice_interaction(project=project)
+
+    group_list = []
+    for group in project_groups:
+        group_list.append(group.name)
+
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    weekly_contacts = Contact.get_weekly_project_contacts(project_groups_list=group_list)
+    weekly_contact_percentage = Contact.get_project_contacts_percentage(contact_variable=weekly_contacts.count(),
+                                                                        project_groups_list=group_list)
+    contact_urns_list = []
+    for contact in contacts:
+        contact_urns_list.append(contact.urns)
+
+    weekly_sent_messages = Message.get_weekly_sent_messages(contact_urns_list)
+    weekly_delivered_messages = Message.get_weekly_delivered_messages(contact_urns_list)
+    weekly_failed_messages = Message.get_weekly_failed_messages(contact_urns_list)
+    weekly_hanging_messages = Message.get_weekly_hanging_messages(contact_urns_list)
+    groups = Group.get_all_groups()
+    percentage_weekly_delivered_messages = Message.get_project_weekly_messages_percentage(
+        message_variable=weekly_delivered_messages.count(), contacts_list=contact_urns_list)
+    percentage_weekly_hanging_messages = Message.get_project_weekly_messages_percentage(
+        message_variable=weekly_hanging_messages.count(), contacts_list=contact_urns_list)
+    percentage_weekly_failed_messages = Message.get_project_weekly_messages_percentage(
+        message_variable=weekly_failed_messages.count(), contacts_list=contact_urns_list)
+
+    logo = "reports/static/images/logo.jpg"
+    project_name = project.name
+    report_title = "%s Weekly Report" % project.name
+    prepared_by = "Faith Nassiwa"
+    start_date = datetime.date.today() - datetime.timedelta(days=7)
+    end_date = datetime.date.today() - datetime.timedelta(days=1)
+    this_day = datetime.datetime.now(pytz.timezone('Africa/Kampala')).strftime('%Y-%m-%d %H:%M %Z')
+
+    im = Image(logo, 3 * inch, 1.5 * inch)
+    table_data = [[im]]
+    t = Table(table_data)
+    report.append(t)
+    report.append(Spacer(1, 12))
+    styles = getSampleStyleSheet()
+    # styles.add(ParagraphStyle(name='Left', alignment=TA_LEFT))
+    ptext = '<font size=18><b>%s</b></font>' % report_title
+    report.append(Paragraph(ptext, styles["Normal"]))
+    report.append(Spacer(1, 12))
+    ptext = '<font size=12> Report Date: %s - %s</font>' % (start_date, end_date)
+    report.append(Paragraph(ptext, styles["Normal"]))
+    ptext = '<font size=12>Report generated on: %s</font>' % this_day
+    report.append(Paragraph(ptext, styles["Normal"]))
+    ptext = '<font size=12> Compiled By: %s</font>' % prepared_by
+    report.append(Paragraph(ptext, styles["Normal"]))
+    report.append(Spacer(1, 12))
+
+    report.append(Spacer(1, 12))
+    report.append(Spacer(1, 12))
+    ptext = '<font size=12> %s has a total of %s contacts. ' \
+            '<br/>%s newly enrolled contacts from last week. ' \
+            '<br/>%s messages were sent out last week. ' \
+            '<br/>%s delivered. ' \
+            '<br/>%s hanging. ' \
+            '<br/>%s failed.</font>' \
+            % (project.name, contacts.count(), weekly_contacts.count(), weekly_sent_messages.count(),
+               percentage_weekly_delivered_messages, percentage_weekly_hanging_messages,
+               percentage_weekly_failed_messages)
+    report.append(Paragraph(ptext, styles["Normal"]))
+    ptext = '<font size=12>Below is a summary of message delivery status.</font>'
+    report.append(Paragraph(ptext, styles["Normal"]))
+    report.append(Spacer(1, 12))
+    message_titles = ['Delivered', 'Hanging', 'Failed to send']
+    data = [message_titles]
+    colwidths = (150, 150, 150)
+    data.append([weekly_delivered_messages.count(), weekly_hanging_messages.count(), weekly_failed_messages.count()])
+
+    t = Table(data, colwidths, style=[('INNERGRID', (0, 0), (-1, -1), 0.25, colors.black),
+                                      ('BOX', (0, 0), (-1, -1), 0.5, colors.black),
+                                      ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                                      ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                      ('BACKGROUND', (0, 0), (-1, 0), colors.yellow),
+                                      ])
+
+    report.append(t)
+    report.append(Spacer(1, 12))
+
+    doc.build(report)
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
+
+
+def send_pdf_email(request):
+    datetime_variable = datetime.datetime.now()
+    projects = Project.objects.filter(id__in=[1]).all()
+    emails_sent = 0
+    for project in projects:
+        #csv_file = send_csv_attachment_email(request, project.id)
+        pdf = generate_pdf_weekly_report(request, project.id)
+        email = EmailMessage('%s_report_%s' % (project.name, datetime_variable),
+                             'Please find attached the weekly report.', 'info360mednet@gmail.com',
+                             ['faithnassiwa@gmail.com'])
+        email.attach('%s_report_%s.pdf' % (project.name, datetime_variable), pdf, 'application/pdf')
+        #email.attach('%s_report_%s.csv' % (project.name, datetime_variable), csv_file, 'text/csv')
+        email.send()
+        emails_sent += 1
+
+    return HttpResponse('%s email(s) sent' % emails_sent )
+
+
+def demo_piechart(request, project_id):
+    """
+    pieChart page
+    """
+    project = Project.objects.get(id=project_id)
+    project_groups = project.group.all()
+    project_groups_count = project.group.count()
+    project_group_list = Project.get_project(name=project.name)
+    group_list = []
+
+    for group in project_groups:
+        group_list.append(group.name)
+
+    contacts = Contact.get_project_contacts(project_groups_list=group_list)
+    contact_urns_list = []
+    for contact in contacts:
+        contact_urns_list.append(contact.urns)
+
+    weekly_sent_messages = Message.get_weekly_sent_messages(contact_urns_list)
+    weekly_delivered_messages = Message.get_weekly_delivered_messages(contact_urns_list)
+    weekly_failed_messages = Message.get_weekly_failed_messages(contact_urns_list)
+    weekly_hanging_messages = Message.get_weekly_hanging_messages(contact_urns_list)
+
+    weekly_delivered_messages_set = weekly_delivered_messages.count()
+    weekly_failed_messages_set = weekly_failed_messages.count()
+    weekly_hanging_messages_set = weekly_hanging_messages.count()
+
+    nb_element = 10
+    xdata = range(nb_element)
+    ydata = [random.randint(1, 10) for i in range(nb_element)]
+    ydata2 = map(lambda x: x * 2, ydata)
+    ydata3 = map(lambda x: x * 3, ydata)
+    ydata4 = map(lambda x: x * 4, ydata)
+
+    extra_serie = {"tooltip": {"y_start": "There are ", "y_end": " calls"}}
+
+    chartdata = {
+        'x': xdata,
+        'name1': 'series 1', 'y1': ydata, 'extra1': extra_serie,
+        'name2': 'series 2', 'y2': ydata2, 'extra2': extra_serie,
+        'name3': 'series 3', 'y3': ydata3, 'extra3': extra_serie,
+        'name4': 'series 4', 'y4': ydata4, 'extra4': extra_serie
+    }
+
+    charttype = "multiBarChart"
+    data = {
+        'charttype': charttype,
+        'chartdata': chartdata,
+        'extra': {
+            'x_is_date': False,
+            'x_axis_format': '',
+            'tag_script_js': True,
+            'jquery_on_ready': False,
+        }
+    }
+    return render(request, 'report/piechart.html', data)
+
+
+def demo_multibarchart(request):
+    """
+    multibarchart page
+    """
+    nb_element = 10
+    xdata = range(nb_element)
+    ydata = [random.randint(1, 10) for i in range(nb_element)]
+    ydata2 = map(lambda x: x * 2, ydata)
+    ydata3 = map(lambda x: x * 3, ydata)
+    ydata4 = map(lambda x: x * 4, ydata)
+
+    extra_serie = {"tooltip": {"y_start": "There are ", "y_end": " calls"}}
+
+    chartdata = {
+        'x': xdata,
+        'name1': 'series 1', 'y1': ydata, 'extra1': extra_serie,
+        'name2': 'series 2', 'y2': ydata2, 'extra2': extra_serie,
+        'name3': 'series 3', 'y3': ydata3, 'extra3': extra_serie,
+        'name4': 'series 4', 'y4': ydata4, 'extra4': extra_serie
+    }
+
+    charttype = "multiBarChart"
+    data = {
+        'charttype': charttype,
+        'chartdata': chartdata
+    }
+    return render_to_response('report/multibarchart.html', data)
