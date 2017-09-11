@@ -191,7 +191,7 @@ def report_template_one(request, project_id):
         "date_format": tooltip_date
     }
     chart2_data = {'x': x2data,
-                   'name2': 'series 2', 'y2': y2_data, 'extra2': extra2_serie
+                   'name2': 'contacts', 'y2': y2_data, 'extra2': extra2_serie
                    }
     chart2_type = "lineChart"
     chart2_container = 'linechart_container'  # container name
@@ -372,7 +372,6 @@ def export_to_csv(request, project_id):
     return response
 
 
-@cache_page(60 * 15)
 def send_csv_attachment_email(request, project_id):
     buffer = StringIO()
     project = Project.objects.get(id=project_id)
@@ -415,18 +414,16 @@ def send_csv_attachment_email(request, project_id):
     writer.writerow([])
 
     writer.writerow(['All %s Contacts' % project.name])
-    writer.writerow(['Contact Number', 'Contact Name', 'Group(s)', 'Created on / Joined on'])
+    writer.writerow(['Contact Number', 'Contact Name', 'Created on / Joined on'])
     for contact in contacts:
-        writer.writerow([contact.urns, contact.name,
-                         (contact_groups for contact_groups in report_tags.clean(contact.groups)), contact.created_on])
+        writer.writerow([contact.urns, contact.name, contact.created_on])
     writer.writerow([])
     writer.writerow([])
 
     writer.writerow(['%s Weekly Enrolled Contacts' % project.name])
-    writer.writerow(['Contact Number', 'Contact Name', 'Group(s)', 'Created on / Joined on'])
+    writer.writerow(['Contact Number', 'Contact Name', 'Created on / Joined on'])
     for contact in weekly_contacts:
-        writer.writerow([contact.urns, contact.name,
-                         (contact_groups for contact_groups in report_tags.clean(contact.groups)), contact.created_on])
+        writer.writerow([contact.urns, contact.name, contact.created_on])
     writer.writerow([])
     writer.writerow([])
 
@@ -479,7 +476,6 @@ def send_csv_attachment_email(request, project_id):
     email.attach('%s_report_%s.pdf' % (project.name, datetime_variable), pdf, 'application/pdf')
     email.send()
     return HttpResponse("Email Sent")
-
 
 
 def getdatatest(request):
@@ -593,17 +589,15 @@ def send_pdf_email(request):
     projects = Project.objects.filter(id__in=[1]).all()
     emails_sent = 0
     for project in projects:
-        #csv_file = send_csv_attachment_email(request, project.id)
         pdf = generate_pdf_weekly_report(request, project.id)
         email = EmailMessage('%s_report_%s' % (project.name, datetime_variable),
                              'Please find attached the weekly report.', 'info360mednet@gmail.com',
                              ['faithnassiwa@gmail.com'])
         email.attach('%s_report_%s.pdf' % (project.name, datetime_variable), pdf, 'application/pdf')
-        #email.attach('%s_report_%s.csv' % (project.name, datetime_variable), csv_file, 'text/csv')
         email.send()
         emails_sent += 1
 
-    return HttpResponse('%s email(s) sent' % emails_sent )
+    return HttpResponse('%s email(s) sent' % emails_sent)
 
 
 def demo_piechart(request, project_id):

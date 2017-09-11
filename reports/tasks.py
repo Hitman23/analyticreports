@@ -4,13 +4,11 @@ from celery.schedules import crontab
 from celery.task import periodic_task
 from celery.utils.log import get_task_logger
 from celery import shared_task
+from django.http import request
+
 from .models import Group, Email, Message, Workspace, Run, Project
+from .views import send_csv_attachment_email
 
-
-@shared_task
-def get_rapidpro_data():
-    Workspace.get_rapidpro_data()
-    return
 
 
 @shared_task
@@ -27,6 +25,8 @@ def get_hiwa_data():
 
 @shared_task
 def send_emails():
-    Email.email_report()
+    projects = Project.objects.all()
+    for project in projects:
+        send_csv_attachment_email(request, project_id=project.id)
     return
 

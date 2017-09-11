@@ -2,7 +2,6 @@ from django.contrib import admin
 from .models import Contact, Group, Run, Flow, Message, Workspace, Project, CampaignEvent, Campaign, Voice, Email, Value
 
 
-
 class EmailAdmin(admin.ModelAdmin):
     list_display = ('name', 'email_address', 'show_projects')
 
@@ -41,7 +40,7 @@ class MessageAdmin(admin.ModelAdmin):
     list_display = ('contact', 'urn', 'direction', 'type', 'status',
                     'visibility', 'text', 'labels', 'created_on', 'sent_on', 'modified_on',)
     list_filter = ('created_on', 'modified_on')
-    search_fields = ['urn', 'text']
+    search_fields = ['urn', 'text', 'status']
 
 
 class FlowAdmin(admin.ModelAdmin):
@@ -59,6 +58,7 @@ class RunAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'run_id', 'flow', 'contact', 'responded', 'exit_type', 'exited_on', 'created_on', 'modified_on')
     search_fields = ['run_id', 'contact', 'flow']
+
 
 class ValueAdmin(admin.ModelAdmin):
     list_display = ('id', 'value_name', 'value', 'category', 'node', 'time', 'run_id')

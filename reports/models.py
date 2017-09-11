@@ -137,15 +137,10 @@ class Contact(models.Model):
                         for gp in groups_lst:
                             if gp not in grp:
                                 grp.append(gp)
+                            else:
+                                grp.remove(gp)
                     else:
                         pass
-
-                    # for gp in contact_instance.groups:
-                    #     if gp in grp:
-                    #         grp.remove(gp)
-                    #     else:
-                    #         grp.append(gp)
-
 
                     cls.objects.filter(uuid=contact.uuid).update(name=contact.name,
                                                                  language=contact.language,
@@ -203,7 +198,6 @@ class Contact(models.Model):
             return cls.objects.filter(query).all()
         else:
             return "No projects added yet"
-
 
     @classmethod
     def get_project_contacts_count(cls, project_groups_list):
@@ -411,7 +405,7 @@ class Message(models.Model):
         if len(contacts_list) > 0:
             query = reduce(operator.or_, (Q(urn__contains=contact) for contact in contacts_list))
             date_diff = datetime.datetime.now() - datetime.timedelta(days=7)
-            return cls.objects.filter(query, direction='out', sent_on__range=(date_diff, datetime.datetime.now()))\
+            return cls.objects.filter(query, direction='out', sent_on__range=(date_diff, datetime.datetime.now())) \
                 .exclude(status__in=['delivered', 'failed']).all()
         else:
             return "No project contacts yet"
@@ -678,14 +672,9 @@ class Email(models.Model):
 
         email_subject = '%s Weekly ( %s ) Report' % (project.name, report_datetime)
         email_body = '<br> Hello,  ' \
-                     '<br>Please find attached the weekly report.' \
-                     '<br>Regards, <br> TMCG Team'
-
-        email_message = EmailMessage(email_subject, email_body, settings.EMAIL_HOST_USER, ['faithnassiwa@gmail.com',
-                                                                                           'faith.nassiwa@tmcg.co.ug',
-                                                                                           'faithnashaba@gmail.com'])
-        # email_message.attach_file(pdf_file)
-        # email_message.attach_file(csv_file, 'text/csv') ## Had issues attaching csv file generated from the view
+                     '<br><br>Please find attached the weekly report.' \
+                     '<br><br>Regards, <br> TMCG Team'
+        email_message = EmailMessage(email_subject, email_body, settings.EMAIL_HOST_USER, mailing_list)
         email_message.content_subtype = "html"
         return email_message
 
@@ -707,8 +696,8 @@ class Voice(models.Model):
         return str(self.project)
 
     @classmethod
-    def get_data(cls, proj):
-        url = "http://voice.tmcg.co.ug/~nicholas/data.php?project={0}".format(urllib2.quote(proj))
+    def get_data(cls, project_name):
+        url = "http://voice.tmcg.co.ug/~nicholas/data.php?project={0}".format(urllib2.quote(project_name))
         req = urllib2.Request(url)
         response = urllib2.urlopen(req)
         data_set = json.load(response)
@@ -725,14 +714,13 @@ class Voice(models.Model):
                     if Contact.urns_exists(number=urns):
                         uuid = hashlib.md5(data['created_at']).hexdigest()
                         obj = Contact.objects.filter(urns=urns).first()
-                        pro = Project.objects.get(name=proj)
+                        pro = Project.objects.get(name=project_name)
                         cls.objects.create(id=data['id'], uuid=uuid, project=pro, contact=obj,
                                            reason=data['reason_for_call'],
                                            advice=data['advice_given'], created_by=data['created_by'],
                                            created_on=data['created_at'])
 
         return data_set
-
 
     @classmethod
     def voice_id_exists(cls, id):
