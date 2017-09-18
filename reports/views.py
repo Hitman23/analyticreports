@@ -479,7 +479,7 @@ def send_csv_attachment_email(request, project_id):
 
 
 def getdatatest(request):
-    data = Voice.get_data(proj="mCrag")
+    data = Voice.get_data(project_name="mCrag")
     lss = []
     for d in data:
         contact = d['phone']

@@ -704,10 +704,10 @@ class Voice(models.Model):
 
         for data in data_set:
             if data['phone'] == "" or data['phone'] is None:
-                pass
+                return
             else:
                 if cls.voice_id_exists(id=data['id']):
-                    pass
+                    return
 
                 else:
                     urns = cls.clean_contact(data['phone'])

@@ -1,10 +1,10 @@
 from django.core.management import BaseCommand
 
-from reports.models import Voice
+from reports.models import Voice, Project
 
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
-        Voice.get_data(project_name='SMS Maama')
+        Project.get_project_voice_data()
 
         self.stdout.write(self.style.SUCCESS('Successfully added voice data'))
